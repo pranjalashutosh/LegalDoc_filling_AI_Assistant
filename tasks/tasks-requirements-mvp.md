@@ -65,15 +65,15 @@
 
 ## Tasks
 
-- [ ] **1.0 Project Setup & Infrastructure**
+- [x] **1.0 Project Setup & Infrastructure**
   - [x] 1.1 Initialize Python project with virtual environment (`python -m venv venv`)
   - [x] 1.2 Create `requirements.txt` with dependencies: `flask>=3.0`, `python-docx>=1.0`, `mammoth>=1.6`, `google-generativeai>=0.3`, `python-dotenv>=1.0`, `werkzeug>=3.0`
   - [x] 1.3 Create `.env.example` with placeholder values: `GOOGLE_API_KEY`, `FLASK_SECRET_KEY`, `SESSION_TIMEOUT`, `MAX_FILE_SIZE_MB`, `ENABLE_LLM`
   - [x] 1.4 Create `.gitignore` to exclude `.env`, `venv/`, `__pycache__/`, `*.pyc`, `uploads/`, `.pytest_cache/`
   - [x] 1.5 Create project directory structure: `lib/`, `routes/`, `static/`, `static/css/`, `static/js/`, `templates/`, `tests/`, `tests/fixtures/`
   - [x] 1.6 Create `config.py` to load environment variables and define constants (file size limits, allowed extensions, session timeout)
-  - [ ] 1.7 Initialize Git repository and create initial commit
-  - [ ] 1.8 Install dependencies: `pip install -r requirements.txt`
+  - [x] 1.7 Initialize Git repository and create initial commit
+  - [x] 1.8 Install dependencies: `pip install -r requirements.txt`
 
 - [ ] **2.0 Backend Core: Document Upload & Multi-Pattern Placeholder Detection**
   - [ ] 2.1 Create `app.py` with Flask app initialization, secret key configuration, and session setup
