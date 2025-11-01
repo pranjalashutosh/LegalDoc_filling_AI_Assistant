@@ -11,7 +11,7 @@
 ## Relevant Files
 
 ### Backend Core
-- `app.py` - Main Flask application entry point with route definitions
+- `app.py` - ✅ Main Flask application with initialization, session config, error handlers, health check, upload and detect blueprints registered
 - `config.py` - ✅ Configuration management with environment variables, constants, and multi-environment support
 - `requirements.txt` - ✅ Python dependencies with flexible version specifications
 - `.env.example` - ✅ Example environment variables file with all configuration placeholders
@@ -20,7 +20,7 @@
 
 ### Document Processing
 - `lib/document_processor.py` - Core document parsing and placeholder detection logic
-- `lib/placeholder_detector.py` - Multi-pattern placeholder detection with false positive filtering
+- `lib/placeholder_detector.py` - ✅ Multi-pattern detection (5 patterns), false positive filtering, normalization, grouping, and summary
 - `lib/document_replacer.py` - Run-level placeholder replacement preserving formatting
 - `lib/preview_generator.py` - HTML preview generation using mammoth
 
@@ -28,8 +28,8 @@
 - `lib/llm_service.py` - Gemini 2.5 Pro integration for question generation with caching and fallback
 
 ### API Routes
-- `routes/upload.py` - File upload endpoint with validation
-- `routes/detect.py` - Placeholder detection endpoint
+- `routes/upload.py` - ✅ File upload endpoint with validation, session management, and cleanup
+- `routes/detect.py` - ✅ Placeholder detection endpoint with filtering, status checks, and re-detection
 - `routes/conversation.py` - Conversational filling endpoints (next question, submit answer)
 - `routes/preview.py` - Preview generation endpoint
 - `routes/download.py` - Completed document download endpoint
@@ -46,8 +46,8 @@
 
 ### Utilities
 - `lib/session_manager.py` - Session state management and cleanup
-- `lib/validators.py` - File validation and input validation utilities
-- `lib/error_handlers.py` - Centralized error handling
+- `lib/validators.py` - ✅ File validation (extension, size, MIME type) with comprehensive error handling
+- `lib/error_handlers.py` - ✅ Centralized error handling with custom exceptions, .docx validation, and user-friendly messages
 
 ### Testing
 - `tests/test_placeholder_detector.py` - Unit tests for placeholder detection
@@ -75,32 +75,32 @@
   - [x] 1.7 Initialize Git repository and create initial commit
   - [x] 1.8 Install dependencies: `pip install -r requirements.txt`
 
-- [ ] **2.0 Backend Core: Document Upload & Multi-Pattern Placeholder Detection**
-  - [ ] 2.1 Create `app.py` with Flask app initialization, secret key configuration, and session setup
-  - [ ] 2.2 Implement `lib/validators.py` with functions: `validate_file_extension()`, `validate_file_size()`, `validate_mime_type()`
-  - [ ] 2.3 Create `routes/upload.py` with POST `/api/upload` endpoint:
+- [x] **2.0 Backend Core: Document Upload & Multi-Pattern Placeholder Detection**
+  - [x] 2.1 Create `app.py` with Flask app initialization, secret key configuration, and session setup
+  - [x] 2.2 Implement `lib/validators.py` with functions: `validate_file_extension()`, `validate_file_size()`, `validate_mime_type()`
+  - [x] 2.3 Create `routes/upload.py` with POST `/api/upload` endpoint:
     - Accept `.docx` file
     - Validate file type and size (≤5 MB)
     - Save file temporarily with unique session ID
     - Store file path in session
     - Return JSON: `{success: true, session_id: "...", filename: "..."}`
-  - [ ] 2.4 Implement `lib/placeholder_detector.py` with `detect_placeholders()` function:
+  - [x] 2.4 Implement `lib/placeholder_detector.py` with `detect_placeholders()` function:
     - Define 5 regex patterns: `{{name}}`, `{name}`, `[Name]`, `_____`, `$[_____]`
     - Parse document paragraphs using `python-docx`
     - Extract all matches with original patterns
     - Normalize placeholder names (lowercase, replace spaces with underscores)
     - Return dict: `{normalized_name: [original_patterns]}`
-  - [ ] 2.5 Implement `reduce_false_positives()` in `lib/placeholder_detector.py`:
+  - [x] 2.5 Implement `reduce_false_positives()` in `lib/placeholder_detector.py`:
     - Filter out numeric citations like `[1]`, `[2(a)]`
     - Filter out "section" references
     - Filter out single-character brackets
     - Keep placeholders with 2+ occurrences or multi-word names
-  - [ ] 2.6 Create `routes/detect.py` with POST `/api/detect` endpoint:
+  - [x] 2.6 Create `routes/detect.py` with POST `/api/detect` endpoint:
     - Retrieve uploaded file from session
     - Call `detect_placeholders()` and `reduce_false_positives()`
     - Store detected placeholders in session
     - Return JSON: `{placeholders: {...}, total_unique: 5, total_occurrences: 12}`
-  - [ ] 2.7 Add error handling for malformed `.docx` files with user-friendly messages
+  - [x] 2.7 Add error handling for malformed `.docx` files with user-friendly messages
 
 - [ ] **3.0 LLM Integration with Google Gemini 2.5 Pro**
   - [ ] 3.1 Create `lib/llm_service.py` with Gemini API initialization using `GOOGLE_API_KEY`
