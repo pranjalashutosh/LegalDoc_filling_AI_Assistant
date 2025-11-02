@@ -98,8 +98,8 @@ app.register_blueprint(upload_bp, url_prefix='/api')
 from routes.detect import detect_bp
 app.register_blueprint(detect_bp, url_prefix='/api')
 
-# from routes.conversation import conversation_bp
-# app.register_blueprint(conversation_bp, url_prefix='/api')
+from routes.conversation import conversation_bp
+app.register_blueprint(conversation_bp, url_prefix='/api')
 
 # from routes.preview import preview_bp
 # app.register_blueprint(preview_bp, url_prefix='/api')

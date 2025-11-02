@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fill Placeholders - Legal Document Filler</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Fill Your Document</h1>
+            <p class="subtitle">Answer each question to complete your document</p>
+        </header>
+
+        <main class="main-content">
+            <!-- Loading Section -->
+            <section id="loading-section" class="processing-section">
+                <div class="processing-card">
+                    <div class="spinner"></div>
+                    <h2>Loading...</h2>
+                    <p>Preparing your questions</p>
+                </div>
+            </section>
+
+            <!-- Conversation Section -->
+            <section id="conversation-section" class="conversation-section hidden">
+                <div class="conversation-card">
+                    <!-- Progress Bar -->
+                    <div class="progress-bar-container">
+                        <div class="progress-info">
+                            <span class="progress-label">Progress</span>
+                            <span class="progress-count">
+                                <span id="current-index">0</span> of <span id="total-count">0</span>
+                            </span>
+                        </div>
+                        <div class="progress-bar-bg">
+                            <div id="progress-bar-fill" class="progress-bar-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- Question Display -->
+                    <div class="question-container">
+                        <div class="question-label">Question</div>
+                        <p id="question-text" class="question-text">Loading question...</p>
+                    </div>
+
+                    <!-- Answer Input -->
+                    <div class="answer-container">
+                        <label for="answer-input" class="answer-label">Your Answer</label>
+                        <input 
+                            type="text" 
+                            id="answer-input" 
+                            class="answer-input" 
+                            placeholder="Type your answer here..."
+                            autocomplete="off"
+                        >
+                        <p id="input-hint" class="input-hint">Press Enter or click Next to continue</p>
+                        <div id="answer-error" class="error-message hidden">
+                            <svg class="error-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            <span id="answer-error-text">Please provide an answer</span>
+                        </div>
+                    </div>
+
+                    <!-- LLM Status (if enabled) -->
+                    <div id="llm-status" class="llm-toggle-section hidden">
+                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                            <svg style="width: 1.25rem; height: 1.25rem; color: var(--primary-color);" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                            </svg>
+                            <span style="font-size: 0.875rem; color: var(--text-secondary);">AI-powered questions enabled</span>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Buttons -->
+                    <div class="nav-buttons">
+                        <button id="back-btn" class="btn btn-secondary" disabled>
+                            ← Back
+                        </button>
+                        <button id="next-btn" class="btn btn-primary" disabled>
+                            Next →
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Error Section -->
+            <section id="error-section" class="results-section hidden">
+                <div class="results-card">
+                    <div class="error-message" style="display: flex;">
+                        <svg class="error-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div>
+                            <h3 style="margin-bottom: 0.5rem;">Session Error</h3>
+                            <p id="error-message-text">Your session may have expired or there was an error loading your data.</p>
+                        </div>
+                    </div>
+                    <div class="button-group">
+                        <button id="return-home-btn" class="btn btn-primary">
+                            Return to Home
+                        </button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2025 Legal Document Filler. For demonstration purposes only.</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/api.js"></script>
+    <script src="/static/js/conversation.js"></script>
+</body>
+</html>
+

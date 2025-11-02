@@ -120,43 +120,43 @@
   - [x] 3.5 Implement rate limiting protection (15 requests/min for free tier)
   - [x] 3.6 Add comprehensive error logging for LLM failures
 
-- [ ] **4.0 Frontend: Upload UI & Conversational Interface**
-  - [ ] 4.1 Create `static/index.html` upload page:
+- [x] **4.0 Frontend: Upload UI & Conversational Interface**
+  - [x] 4.1 Create `static/index.html` upload page:
     - File input for `.docx` upload with drag-and-drop support
     - Upload button
     - Loading spinner during upload/parsing
     - Display detected placeholders count
     - "Start Filling" button to begin conversation
-  - [ ] 4.2 Create `static/js/upload.js`:
+  - [x] 4.2 Create `static/js/upload.js`:
     - Handle file selection and validation (client-side)
     - POST file to `/api/upload` endpoint
     - On success, POST to `/api/detect` to get placeholders
     - Display placeholder summary
     - Redirect to conversation page on "Start Filling"
-  - [ ] 4.3 Create `static/conversation.html`:
+  - [x] 4.3 Create `static/conversation.html`:
     - Progress bar showing "X of Y completed"
     - Question display area (LLM-generated or fallback)
     - Text input for answer with validation (non-empty)
     - "Next" button (disabled until input valid)
     - "Back" button to edit previous answers (if time permits)
     - LLM toggle switch: "Use simple prompts instead ☐"
-  - [ ] 4.4 Create `routes/conversation.py` with endpoints:
+  - [x] 4.4 Create `routes/conversation.py` with endpoints:
     - GET `/api/conversation/next` - Get next placeholder question (calls LLM or uses fallback)
     - POST `/api/conversation/answer` - Submit answer for current placeholder, store in session
     - GET `/api/conversation/status` - Get progress (filled/total)
-  - [ ] 4.5 Create `static/js/conversation.js`:
+  - [x] 4.5 Create `static/js/conversation.js`:
     - Fetch next question on page load
     - Validate input (non-empty)
     - Submit answer on "Next" click
     - Update progress bar
     - Handle LLM toggle state changes
     - Redirect to preview when all placeholders filled
-  - [ ] 4.6 Create `static/css/styles.css`:
+  - [x] 4.6 Create `static/css/styles.css`:
     - Clean, professional styling
     - Responsive layout (desktop-first, mobile-friendly if time permits)
     - Loading states and transitions
     - Progress bar styling
-  - [ ] 4.7 Add API client utilities in `static/js/api.js`:
+  - [x] 4.7 Add API client utilities in `static/js/api.js`:
     - Helper functions for fetch requests with error handling
     - Session management helpers
     - Loading state management
