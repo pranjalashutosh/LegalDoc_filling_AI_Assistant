@@ -194,6 +194,54 @@ def validate_docx_file(file_path):
 
 
 # Flask error handler registration functions
+def handle_api_error(error, default_message='An error occurred'):
+    """
+    Handle API errors and return a standardized JSON response.
+    
+    Args:
+        error (Exception): The exception that occurred
+        default_message (str): Default error message if specific handling not available
+    
+    Returns:
+        tuple: (JSON response, status code)
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Log the error
+    logger.error(f"API error: {str(error)}", exc_info=True)
+    
+    # Handle specific exception types
+    if isinstance(error, FileValidationError):
+        return jsonify({
+            'success': False,
+            'error': 'File Validation Error',
+            'message': str(error)
+        }), 400
+    
+    elif isinstance(error, ParsingError):
+        return handle_docx_error(error, logger)
+    
+    elif isinstance(error, LLMError):
+        return jsonify({
+            'success': False,
+            'error': 'AI Service Error',
+            'message': 'The AI service encountered an error. Using fallback mode.',
+            'details': str(error)
+        }), 500
+    
+    elif isinstance(error, SessionExpiredError):
+        return get_error_response('session_expired', 401)
+    
+    else:
+        # Generic error handling
+        return jsonify({
+            'success': False,
+            'error': 'Error',
+            'message': default_message,
+            'details': str(error)
+        }), 500
+
+
 def register_error_handlers(app):
     """
     Register custom error handlers with Flask app.

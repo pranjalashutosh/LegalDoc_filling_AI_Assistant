@@ -33,6 +33,13 @@ app.config['PERMANENT_SESSION_LIFETIME'] = app.config.get('SESSION_TIMEOUT', 360
 upload_folder = app.config.get('UPLOAD_FOLDER', 'uploads')
 os.makedirs(upload_folder, exist_ok=True)
 
+# Initialize session manager and register error handlers
+from lib.session_manager import session_manager
+from lib.error_handlers import register_error_handlers
+
+session_manager.init_app(app)
+register_error_handlers(app)
+
 
 @app.route('/')
 def index():

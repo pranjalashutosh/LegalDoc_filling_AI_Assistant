@@ -193,49 +193,49 @@
     - Clean up temporary file after download
     - Return file as attachment
 
-- [ ] **6.0 Session Management, Error Handling & Testing**
-  - [ ] 6.1 Implement `lib/session_manager.py`:
+- [x] **6.0 Session Management, Error Handling & Testing**
+  - [x] 6.1 Implement `lib/session_manager.py`:
     - Function to initialize session with unique ID
     - Function to store file path, placeholders, answers in session
     - Function to check session timeout (60 min inactivity)
     - Function to clear/purge session data
     - Background cleanup task to remove expired sessions
-  - [ ] 6.2 Create `lib/error_handlers.py`:
+  - [x] 6.2 Create `lib/error_handlers.py`:
     - Custom error classes: `FileValidationError`, `ParsingError`, `LLMError`, `SessionExpiredError`
     - Flask error handlers for 400, 404, 500 status codes
     - User-friendly error messages for each error type
     - Error logging to console/file
-  - [ ] 6.3 Implement session timeout middleware in `app.py`:
+  - [x] 6.3 Implement session timeout middleware in `app.py`:
     - Check last activity timestamp on each request
     - Redirect to home with message if session expired
-  - [ ] 6.4 Add file cleanup logic:
+  - [x] 6.4 Add file cleanup logic:
     - Delete uploaded files after session ends
     - Delete generated documents after download
     - Schedule periodic cleanup of orphaned files
-  - [ ] 6.5 Create test fixtures in `tests/fixtures/`:
+  - [x] 6.5 Create test fixtures in `tests/fixtures/`:
     - Sample `.docx` with various placeholder patterns
     - Sample `.docx` with false positives (citations)
     - Sample `.docx` with mixed-case brackets like `[Date of Safe]`
-  - [ ] 6.6 Write unit tests in `tests/test_placeholder_detector.py`:
+  - [x] 6.6 Write unit tests in `tests/test_placeholder_detector.py`:
     - Test all 5 pattern types detected correctly
     - Test normalization (case-insensitive, space → underscore)
     - Test false positive filtering (citations, sections)
     - Test mixed-case bracket detection: `[Date of Safe]`
-  - [ ] 6.7 Write unit tests in `tests/test_document_replacer.py`:
+  - [x] 6.7 Write unit tests in `tests/test_document_replacer.py`:
     - Test replacement preserves formatting (bold, italic)
     - Test all pattern types replaced correctly
     - Test run-level replacement (not paragraph-level)
-  - [ ] 6.8 Write unit tests in `tests/test_llm_service.py`:
+  - [x] 6.8 Write unit tests in `tests/test_llm_service.py`:
     - Test question generation with mocked Gemini API
     - Test fallback behavior on timeout/error
     - Test caching (same placeholder = cached response)
     - Test batch generation
-  - [ ] 6.9 Write integration tests in `tests/test_api_routes.py`:
+  - [x] 6.9 Write integration tests in `tests/test_api_routes.py`:
     - Test full flow: upload → detect → answer → preview → download
     - Test file validation errors
     - Test session expiration
     - Test LLM toggle on/off
-  - [ ] 6.10 Add logging throughout application (request IDs, errors, performance metrics)
+  - [x] 6.10 Add logging throughout application (request IDs, errors, performance metrics)
 
 - [ ] **7.0 Deployment & Production Readiness**
   - [ ] 7.1 Create `README.md` with:
