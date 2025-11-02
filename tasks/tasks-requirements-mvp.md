@@ -25,7 +25,7 @@
 - `lib/preview_generator.py` - HTML preview generation using mammoth
 
 ### LLM Integration
-- `lib/llm_service.py` - Gemini 2.5 Pro integration for question generation with caching and fallback
+- `lib/llm_service.py` - ✅ Gemini 2.0 Flash with single/batch question generation, LRU caching, rate limiting, toggle control, and fallback handling
 
 ### API Routes
 - `routes/upload.py` - ✅ File upload endpoint with validation, session management, and cleanup
@@ -102,23 +102,23 @@
     - Return JSON: `{placeholders: {...}, total_unique: 5, total_occurrences: 12}`
   - [x] 2.7 Add error handling for malformed `.docx` files with user-friendly messages
 
-- [ ] **3.0 LLM Integration with Google Gemini 2.5 Pro**
-  - [ ] 3.1 Create `lib/llm_service.py` with Gemini API initialization using `GOOGLE_API_KEY`
-  - [ ] 3.2 Implement `generate_question(placeholder_name, use_llm=True)` function:
+- [x] **3.0 LLM Integration with Google Gemini 2.5 Pro**
+  - [x] 3.1 Create `lib/llm_service.py` with Gemini API initialization using `GOOGLE_API_KEY`
+  - [x] 3.2 Implement `generate_question(placeholder_name, use_llm=True)` function:
     - Use `@lru_cache` decorator for caching (maxsize=100)
     - Create prompt: "Convert this placeholder name into a clear, professional question for a legal document..."
     - Call `model.generate_content()` with temperature=0.3, max_tokens=50, timeout=3s
     - Return generated question or fallback to "Please provide: {placeholder_name}"
     - Handle exceptions gracefully (timeout, API errors)
-  - [ ] 3.3 Implement `generate_questions_batch(placeholder_names)` function:
+  - [x] 3.3 Implement `generate_questions_batch(placeholder_names)` function:
     - Accept list of placeholder names
     - Generate single prompt with numbered placeholders
     - Parse numbered response and map to placeholder names
     - Return dict: `{placeholder_name: question}`
     - Fallback to simple prompts on error
-  - [ ] 3.4 Add LLM toggle logic: check `ENABLE_LLM` env var and session preference
-  - [ ] 3.5 Implement rate limiting protection (15 requests/min for free tier)
-  - [ ] 3.6 Add comprehensive error logging for LLM failures
+  - [x] 3.4 Add LLM toggle logic: check `ENABLE_LLM` env var and session preference
+  - [x] 3.5 Implement rate limiting protection (15 requests/min for free tier)
+  - [x] 3.6 Add comprehensive error logging for LLM failures
 
 - [ ] **4.0 Frontend: Upload UI & Conversational Interface**
   - [ ] 4.1 Create `static/index.html` upload page:
