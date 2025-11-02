@@ -101,11 +101,11 @@ app.register_blueprint(detect_bp, url_prefix='/api')
 from routes.conversation import conversation_bp
 app.register_blueprint(conversation_bp, url_prefix='/api')
 
-# from routes.preview import preview_bp
-# app.register_blueprint(preview_bp, url_prefix='/api')
+from routes.preview import preview_bp
+app.register_blueprint(preview_bp, url_prefix='/api')
 
-# from routes.download import download_bp
-# app.register_blueprint(download_bp, url_prefix='/api')
+from routes.download import download_bp
+app.register_blueprint(download_bp, url_prefix='/api')
 
 
 if __name__ == '__main__':

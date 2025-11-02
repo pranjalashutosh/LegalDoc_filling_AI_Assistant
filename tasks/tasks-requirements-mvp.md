@@ -161,32 +161,32 @@
     - Session management helpers
     - Loading state management
 
-- [ ] **5.0 Document Preview (HTML) & Download**
-  - [ ] 5.1 Implement `lib/document_replacer.py` with `replace_placeholders()` function:
+- [x] **5.0 Document Preview (HTML) & Download**
+  - [x] 5.1 Implement `lib/document_replacer.py` with `replace_placeholders()` function:
     - Load document using `python-docx`
     - Iterate through paragraphs and runs (preserve formatting)
     - For each placeholder pattern type, replace with user value
     - Handle all 5 pattern types: `{{}}`, `{}`, `[]`, `___`, `$[___]`
     - Save completed document to temporary location
     - Return path to completed document
-  - [ ] 5.2 Implement `lib/preview_generator.py` with `generate_preview_html()` function:
+  - [x] 5.2 Implement `lib/preview_generator.py` with `generate_preview_html()` function:
     - Use `mammoth` library to convert `.docx` to HTML
     - Wrap HTML in styled template with basic CSS
     - Return complete HTML string
     - Handle conversion errors gracefully
-  - [ ] 5.3 Create `routes/preview.py` with endpoints:
+  - [x] 5.3 Create `routes/preview.py` with endpoints:
     - POST `/api/preview/generate` - Generate completed document and HTML preview
     - GET `/api/preview/html` - Serve HTML preview content
-  - [ ] 5.4 Create `static/preview.html`:
+  - [x] 5.4 Create `static/preview.html`:
     - Iframe or div to display HTML preview
     - Zoom controls (optional)
     - "Edit Values" button (returns to conversation)
     - "Download .docx" button
-  - [ ] 5.5 Create `static/js/preview.js`:
+  - [x] 5.5 Create `static/js/preview.js`:
     - Fetch and render HTML preview on page load
     - Handle download button click
     - Handle edit button (clear session or navigate back)
-  - [ ] 5.6 Create `routes/download.py` with GET `/api/download` endpoint:
+  - [x] 5.6 Create `routes/download.py` with GET `/api/download` endpoint:
     - Retrieve completed document from session/temp storage
     - Set appropriate headers for file download
     - Filename format: `{original_name}_completed_{timestamp}.docx`
