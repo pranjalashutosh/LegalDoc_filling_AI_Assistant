@@ -5,7 +5,7 @@ Handles document preview generation and serving
 
 from flask import Blueprint, request, session, jsonify, send_file
 from lib.document_replacer import replace_placeholders, DocumentReplacementError
-from lib.preview_generator import generate_preview_html, PreviewGenerationError
+from lib.preview_generator import generate_preview_html, save_preview_html, PreviewGenerationError
 from lib.error_handlers import handle_api_error, SessionExpiredError
 from config import Config
 import logging
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 preview_bp = Blueprint('preview', __name__)
 
 
-@preview_bp.route('/api/preview/generate', methods=['POST'])
+@preview_bp.route('/preview/generate', methods=['POST'])
 def generate_preview():
     """
     Generate a completed document and HTML preview.
@@ -36,11 +36,11 @@ def generate_preview():
     """
     try:
         # Check session for required data
-        filename = session.get('filename')
+        uploaded = session.get('uploaded_file')
         answers = session.get('answers', {})
         placeholders = session.get('placeholders', [])
         
-        if not filename:
+        if not uploaded or not uploaded.get('file_path'):
             raise SessionExpiredError('No uploaded file found in session')
         
         if not answers:
@@ -50,30 +50,41 @@ def generate_preview():
             }), 400
         
         # Construct input file path
-        upload_folder = Config.UPLOAD_FOLDER
-        input_path = os.path.join(upload_folder, filename)
+        # Use the exact saved file path from upload step
+        input_path = uploaded['file_path']
         
         if not os.path.exists(input_path):
             raise SessionExpiredError('Uploaded file no longer exists. Please upload again.')
         
         # Generate output filename
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        base_name = os.path.splitext(filename)[0]
+        base_name, _ = os.path.splitext(uploaded.get('safe_filename') or uploaded.get('original_filename') or 'document')
         completed_filename = f"{base_name}_completed_{timestamp}.docx"
-        completed_path = os.path.join(upload_folder, completed_filename)
+        # Save the completed file in the same session-specific folder as the upload
+        session_folder = os.path.dirname(input_path)
+        completed_path = os.path.join(session_folder, completed_filename)
         
         # Replace placeholders
-        logger.info(f"Replacing placeholders in document: {filename}")
+        logger.info(
+            f"Replacing placeholders in document: {uploaded.get('original_filename') or uploaded.get('safe_filename')}"
+        )
         logger.debug(f"Answers provided: {len(answers)} placeholders")
         
-        replace_placeholders(input_path, completed_path, answers)
+        # Include per-instance overrides if any
+        overrides = session.get('answers_overrides', {})
+        replace_placeholders(input_path, completed_path, answers, overrides)
         
-        # Generate HTML preview
+        # Generate HTML preview and save to file (avoid storing large HTML in session cookie)
         logger.info("Generating HTML preview")
         html_preview = generate_preview_html(completed_path)
-        
-        # Store preview HTML in session (for serving later)
-        session['preview_html'] = html_preview
+
+        # Persist preview to an .html file in the same session folder
+        preview_filename = f"{base_name}_preview_{timestamp}.html"
+        preview_path = os.path.join(session_folder, preview_filename)
+        save_preview_html(html_preview, preview_path)
+
+        # Store only file paths and filenames in session (small cookie size)
+        session['preview_html_path'] = preview_path
         session['completed_filename'] = completed_filename
         session['completed_path'] = completed_path
         session.modified = True
@@ -100,7 +111,7 @@ def generate_preview():
         return handle_api_error(e, 'Failed to generate preview')
 
 
-@preview_bp.route('/api/preview/html', methods=['GET'])
+@preview_bp.route('/preview/html', methods=['GET'])
 def get_preview_html():
     """
     Serve the HTML preview content.
@@ -109,17 +120,27 @@ def get_preview_html():
         HTML content as text/html
     """
     try:
-        # Retrieve preview HTML from session
-        html_content = session.get('preview_html')
-        
-        if not html_content:
-            raise SessionExpiredError('No preview available. Please generate preview first.')
-        
-        logger.info("Serving HTML preview")
-        
-        # Return HTML content directly
-        from flask import Response
-        return Response(html_content, mimetype='text/html')
+        # Prefer reading from saved preview file
+        preview_path = session.get('preview_html_path')
+        completed_path = session.get('completed_path')
+
+        # If preview file exists, serve it
+        if preview_path and os.path.exists(preview_path):
+            logger.info("Serving HTML preview from file")
+            with open(preview_path, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            from flask import Response
+            return Response(html_content, mimetype='text/html')
+
+        # If preview file missing but completed document exists, regenerate on the fly
+        if completed_path and os.path.exists(completed_path):
+            logger.info("Preview file missing; regenerating from completed document")
+            html_content = generate_preview_html(completed_path)
+            from flask import Response
+            return Response(html_content, mimetype='text/html')
+
+        # Otherwise, no preview available
+        raise SessionExpiredError('No preview available. Please generate preview first.')
         
     except SessionExpiredError as e:
         return handle_api_error(e, 'Session expired')
@@ -128,7 +149,7 @@ def get_preview_html():
         return handle_api_error(e, 'Failed to serve preview')
 
 
-@preview_bp.route('/api/preview/status', methods=['GET'])
+@preview_bp.route('/preview/status', methods=['GET'])
 def get_preview_status():
     """
     Check if a preview is available in the session.
@@ -137,7 +158,9 @@ def get_preview_status():
         JSON with preview availability status
     """
     try:
-        has_preview = 'preview_html' in session and 'completed_filename' in session
+        preview_path = session.get('preview_html_path')
+        completed_path = session.get('completed_path')
+        has_preview = bool(preview_path and os.path.exists(preview_path)) or bool(completed_path and os.path.exists(completed_path))
         completed_filename = session.get('completed_filename')
         
         return jsonify({
@@ -151,7 +174,7 @@ def get_preview_status():
         return handle_api_error(e, 'Failed to check preview status')
 
 
-@preview_bp.route('/api/preview/regenerate', methods=['POST'])
+@preview_bp.route('/preview/regenerate', methods=['POST'])
 def regenerate_preview():
     """
     Regenerate the preview (useful after editing answers).
@@ -162,8 +185,15 @@ def regenerate_preview():
     """
     try:
         # Clear existing preview
-        if 'preview_html' in session:
-            session.pop('preview_html')
+        preview_path = session.get('preview_html_path')
+        if preview_path and os.path.exists(preview_path):
+            try:
+                os.remove(preview_path)
+                logger.info(f"Removed preview file: {preview_path}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to clean up preview file: {cleanup_error}")
+        if 'preview_html_path' in session:
+            session.pop('preview_html_path')
         if 'completed_path' in session:
             # Clean up old completed file
             old_path = session.get('completed_path')
@@ -187,7 +217,7 @@ def regenerate_preview():
         return handle_api_error(e, 'Failed to regenerate preview')
 
 
-@preview_bp.route('/api/preview/clear', methods=['POST'])
+@preview_bp.route('/preview/clear', methods=['POST'])
 def clear_preview():
     """
     Clear the preview from session and clean up files.
@@ -205,9 +235,18 @@ def clear_preview():
             except Exception as cleanup_error:
                 logger.warning(f"Failed to clean up completed file: {cleanup_error}")
         
+        # Clean up preview file if exists
+        preview_path = session.get('preview_html_path')
+        if preview_path and os.path.exists(preview_path):
+            try:
+                os.remove(preview_path)
+                logger.info(f"Removed preview file: {preview_path}")
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to clean up preview file: {cleanup_error}")
+
         # Clear preview data from session
-        if 'preview_html' in session:
-            session.pop('preview_html')
+        if 'preview_html_path' in session:
+            session.pop('preview_html_path')
         if 'completed_path' in session:
             session.pop('completed_path')
         if 'completed_filename' in session:

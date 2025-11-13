@@ -5,11 +5,15 @@ Unit tests for placeholder detection functionality
 import pytest
 from lib.placeholder_detector import (
     detect_placeholders,
+    detect_placeholders_with_context,
     reduce_false_positives,
     normalize_placeholder_name,
     get_placeholder_count,
     get_total_occurrences
 )
+from docx import Document
+import tempfile
+import os
 
 
 @pytest.mark.unit
@@ -18,9 +22,14 @@ class TestPlaceholderDetection:
     
     def test_double_curly_braces(self):
         """Test detection of {{PLACEHOLDER}} pattern."""
-        text = "This contract is between {{COMPANY_NAME}} and {{CLIENT_NAME}}."
-        
-        result = detect_placeholders(text)
+        # Create a DOCX for this test
+        doc = Document()
+        doc.add_paragraph("This contract is between {{COMPANY_NAME}} and {{CLIENT_NAME}}.")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'COMPANY_NAME' in result
         assert 'CLIENT_NAME' in result
@@ -28,9 +37,13 @@ class TestPlaceholderDetection:
     
     def test_single_curly_braces(self):
         """Test detection of {PLACEHOLDER} pattern."""
-        text = "Payment due: {PAYMENT_DATE} Amount: {AMOUNT}"
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        doc.add_paragraph("Payment due: {PAYMENT_DATE} Amount: {AMOUNT}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'PAYMENT_DATE' in result
         assert 'AMOUNT' in result
@@ -38,18 +51,26 @@ class TestPlaceholderDetection:
     
     def test_square_brackets_uppercase(self):
         """Test detection of [PLACEHOLDER] pattern (uppercase)."""
-        text = "The agreement dated [CONTRACT_DATE] is hereby executed."
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        doc.add_paragraph("The agreement dated [CONTRACT_DATE] is hereby executed.")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'CONTRACT_DATE' in result
         assert len(result) == 1
     
     def test_square_brackets_mixed_case(self):
         """Test detection of [Placeholder Name] pattern (mixed case)."""
-        text = "This [Date of Safe] shall be binding on [Party Name]."
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        doc.add_paragraph("This [Date of Safe] shall be binding on [Party Name].")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'Date_of_Safe' in result
         assert 'Party_Name' in result
@@ -57,9 +78,13 @@ class TestPlaceholderDetection:
     
     def test_underscores(self):
         """Test detection of _____ pattern (5+ underscores)."""
-        text = "Signed by: _____ on date: _____"
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        doc.add_paragraph("Signed by: _____ on date: _____")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'UNDERSCORE_PLACEHOLDER' in result
         # Should group multiple underscore placeholders
@@ -67,23 +92,30 @@ class TestPlaceholderDetection:
     
     def test_dollar_brackets(self):
         """Test detection of $[_____] pattern."""
-        text = "Amount payable: $[_____] by $[_____]"
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        doc.add_paragraph("Amount payable: $[_____] by $[_____]")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'DOLLAR_BRACKET_PLACEHOLDER' in result
         assert result['DOLLAR_BRACKET_PLACEHOLDER']['count'] == 2
     
     def test_multiple_patterns_together(self):
         """Test detection of multiple pattern types in same text."""
-        text = """
-        Contract between {{COMPANY}} and {CLIENT}.
-        Date: [CONTRACT_DATE]
-        Signature: _____
-        Amount: $[_____]
-        """
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        p = doc.add_paragraph()
+        p.add_run("Contract between {{COMPANY}} and {CLIENT}.")
+        doc.add_paragraph("Date: [CONTRACT_DATE]")
+        doc.add_paragraph("Signature: _____")
+        doc.add_paragraph("Amount: $[_____]")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert 'COMPANY' in result
         assert 'CLIENT' in result
@@ -94,9 +126,13 @@ class TestPlaceholderDetection:
     
     def test_repeated_placeholders(self):
         """Test that repeated placeholders are counted correctly."""
-        text = "{{NAME}} agrees that {{NAME}} will pay {{AMOUNT}}. {{AMOUNT}} is due on {{DATE}}."
-        
-        result = detect_placeholders(text)
+        doc = Document()
+        doc.add_paragraph("{{NAME}} agrees that {{NAME}} will pay {{AMOUNT}}. {{AMOUNT}} is due on {{DATE}}.")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
         assert result['NAME']['count'] == 2
         assert result['AMOUNT']['count'] == 2
@@ -104,12 +140,93 @@ class TestPlaceholderDetection:
     
     def test_case_insensitive_normalization(self):
         """Test that placeholder names are normalized (case-insensitive for curly braces)."""
-        text = "{{CompanyName}} and {{COMPANYNAME}} and {{company_name}}"
+        doc = Document()
+        doc.add_paragraph("{{CompanyName}} and {{COMPANYNAME}} and {{company_name}}")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders(path)
+        os.remove(path)
         
-        result = detect_placeholders(text)
+    def test_signature_line_without_underscores(self):
+        """Address:/Email: with leader/tabs only should be detected in with_context."""
+        doc = Document()
+        doc.add_paragraph("Address:\t\t\t")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders_with_context(path)
+        os.remove(path)
+        placeholders = result['placeholders']
+        assert 'address' in placeholders
         
-        # All should be normalized to the same key
-        assert 'COMPANY_NAME' in result or 'COMPANYNAME' in result
+    def test_bracket_underscore_removed(self):
+        """[_____] should no longer be detected as a placeholder."""
+        doc = Document()
+        doc.add_paragraph("[_____]")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders_with_context(path)
+        os.remove(path)
+        assert 'blank' not in result['placeholders']
+    
+    def test_overlap_arbitration(self):
+        """Higher-priority longer match should win; overlapping weaker matches dropped."""
+        doc = Document()
+        # Create overlapping patterns: [Company Name] contains potential underscore pattern
+        doc.add_paragraph("[Company Name]")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders_with_context(path)
+        os.remove(path)
+        # Should detect square_bracket (priority 4), not underscore (priority 1)
+        assert 'company_name' in result['placeholders']
+        # Verify only one candidate for this span
+        assert len(result['candidates']) == 1
+        assert result['candidates'][0]['pattern_type'] == 'square_bracket'
+    
+    def test_context_and_instance_ids(self):
+        """Ensure sentence context captured and stable instance IDs assigned."""
+        doc = Document()
+        doc.add_paragraph("This is the first sentence. The {{COMPANY}} will pay {{AMOUNT}}. This is the last sentence.")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders_with_context(path)
+        os.remove(path)
+        candidates = result['candidates']
+        assert len(candidates) == 2
+        # Check first candidate has context
+        c1 = candidates[0]
+        assert 'context' in c1
+        assert 'prev' in c1['context']
+        assert 'sentence' in c1['context']
+        assert 'next' in c1['context']
+        # Check instance IDs are stable and unique
+        assert 'id' in c1
+        assert c1['id'].startswith('p0-s')  # paragraph 0, start position
+        assert candidates[0]['id'] != candidates[1]['id']
+    
+    def test_false_positive_filter_after_arbitration(self):
+        """False-positive filter should still work after arbitration."""
+        doc = Document()
+        doc.add_paragraph("See [Section 2(a)] and {{COMPANY_NAME}}.")
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.docx') as tmp:
+            doc.save(tmp.name)
+            path = tmp.name
+        result = detect_placeholders_with_context(path)
+        os.remove(path)
+        placeholders = result['placeholders']
+        # Section reference should be filtered out
+        assert 'section' not in placeholders
+        assert 'section_2_a' not in placeholders
+        # Real placeholder should remain
+        assert 'company_name' in placeholders
+        # Verify we have exactly 1 candidate (section ref was not added)
+        assert len(result['candidates']) == 1
+        assert result['candidates'][0]['normalized'] == 'company_name'
 
 
 @pytest.mark.unit

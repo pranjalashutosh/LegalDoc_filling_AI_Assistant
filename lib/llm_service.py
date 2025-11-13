@@ -5,6 +5,7 @@ Generates natural language questions for placeholder fields.
 
 import google.generativeai as genai
 import os
+import json
 from functools import lru_cache
 from datetime import datetime, timedelta
 import logging
@@ -17,10 +18,13 @@ GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
 ENABLE_LLM = os.getenv('ENABLE_LLM', 'true').lower() == 'true'
 
 # Model configuration
-MODEL_NAME = 'gemini-2.0-flash-exp'  # Using Gemini 2.0 Flash for faster responses
+# Model selection with fallback
+# Primary model can be overridden with LLM_MODEL env. Fallback can be set via LLM_MODEL_FALLBACK
+MODEL_NAME = os.getenv('LLM_MODEL', 'gemini-2.5-pro')
+MODEL_FALLBACK = os.getenv('LLM_MODEL_FALLBACK', 'gemini-2.0-flash-exp')
 GENERATION_CONFIG = {
     'temperature': 0.3,  # More consistent, less creative
-    'max_output_tokens': 100,
+    'max_output_tokens': 4096,  # Give enough room to avoid early truncation
     'top_p': 0.8,
 }
 
@@ -29,6 +33,9 @@ _rate_limit_tracker = {
     'requests': [],
     'max_per_minute': 15  # Gemini free tier: 15 RPM
 }
+
+# Cached model instances per model name
+_model_instances = {}
 
 
 def initialize_gemini():
@@ -50,14 +57,14 @@ def initialize_gemini():
     
     try:
         genai.configure(api_key=GOOGLE_API_KEY)
-        logger.info(f"Gemini API initialized successfully with model: {MODEL_NAME}")
+        logger.info(f"Gemini API initialized successfully. Primary model: {MODEL_NAME}; Fallback: {MODEL_FALLBACK}")
         return True
     except Exception as e:
         logger.error(f"Failed to initialize Gemini API: {str(e)}")
         return False
 
 
-def get_model():
+def get_model(model_name: str = None):
     """
     Get the configured Gemini model instance.
     
@@ -68,10 +75,12 @@ def get_model():
         return None
     
     try:
-        model = genai.GenerativeModel(MODEL_NAME)
-        return model
+        name = model_name or MODEL_NAME
+        if name not in _model_instances:
+            _model_instances[name] = genai.GenerativeModel(name)
+        return _model_instances[name]
     except Exception as e:
-        logger.error(f"Failed to create model instance: {str(e)}")
+        logger.error(f"Failed to create model instance '{model_name or MODEL_NAME}': {str(e)}")
         return None
 
 
@@ -146,8 +155,7 @@ def generate_question(placeholder_name: str, use_llm: bool = True) -> str:
         'When will this document be signed? (Please provide a date)'
     """
     # Fallback question
-    formatted_name = placeholder_name.replace('_', ' ').title()
-    fallback = f"Please provide: {formatted_name}"
+    fallback = _contextual_fallback_question(placeholder_name, '')
     
     # Check if LLM should be used
     if not use_llm or not is_llm_enabled():
@@ -161,12 +169,6 @@ def generate_question(placeholder_name: str, use_llm: bool = True) -> str:
         return fallback
     
     try:
-        # Get model
-        model = get_model()
-        if not model:
-            logger.warning("Model not available, using fallback")
-            return fallback
-        
         # Create prompt
         prompt = f"""Convert this placeholder name into a clear, professional question for a legal document.
 
@@ -180,20 +182,14 @@ Placeholder name: {placeholder_name}
 
 Generate only the question, nothing else:"""
         
-        # Record request for rate limiting
-        record_request()
-        
-        # Generate content with timeout
+        # Generate content with timeout (with model fallback)
         try:
-            response = model.generate_content(
-                prompt,
-                generation_config=GENERATION_CONFIG,
-                request_options={'timeout': 3}
-            )
+            response, used_model = _generate_with_fallback(prompt, GENERATION_CONFIG, 3)
             
             # Extract text
-            if response and hasattr(response, 'text'):
-                question = response.text.strip()
+            question = _extract_response_text(response)
+            if question:
+                question = question.strip()
                 
                 # Clean up response
                 # Remove quotes if present
@@ -262,13 +258,6 @@ def generate_questions_batch(placeholder_names: list) -> dict:
                 for name in placeholder_names}
     
     try:
-        # Get model
-        model = get_model()
-        if not model:
-            logger.warning("Model not available, using fallback for batch")
-            return {name: f"Please provide: {name.replace('_', ' ').title()}" 
-                    for name in placeholder_names}
-        
         # Create numbered list of placeholders
         placeholders_list = "\n".join([f"{i+1}. {name}" for i, name in enumerate(placeholder_names)])
         
@@ -288,20 +277,14 @@ Placeholders:
 
 Generate the questions (numbered 1-{len(placeholder_names)}):"""
         
-        # Record request for rate limiting
-        record_request()
-        
-        # Generate content with timeout
+        # Generate content with timeout (with model fallback)
         try:
-            response = model.generate_content(
-                prompt,
-                generation_config=GENERATION_CONFIG,
-                request_options={'timeout': 5}  # Slightly longer timeout for batch
-            )
+            response, used_model = _generate_with_fallback(prompt, GENERATION_CONFIG, 5)
             
             # Parse response
-            if response and hasattr(response, 'text'):
-                response_text = response.text.strip()
+            response_text = _extract_response_text(response)
+            if response_text:
+                response_text = response_text.strip()
                 lines = response_text.split('\n')
                 
                 questions = {}
@@ -384,4 +367,395 @@ def get_cache_info():
         'maxsize': cache_info.maxsize
     }
 
+
+# ===== New Hybrid Validation and Context-Aware Question APIs =====
+
+def _clip_text(text: str, max_len: int = 400) -> str:
+    t = (text or '').strip()
+    return t[:max_len]
+
+
+def _extract_response_text(resp) -> str:
+    """
+    Robustly extract text from a Gemini response.
+    Avoids using resp.text quick accessor which raises when no valid Part exists.
+    Returns an empty string if no text is available.
+    """
+    try:
+        if not resp:
+            return ''
+        # Preferred: use candidates → content → parts → text
+        candidates = getattr(resp, 'candidates', None)
+        if candidates and len(candidates) > 0:
+            for cand in candidates:
+                content = getattr(cand, 'content', None)
+                if not content:
+                    continue
+                parts = getattr(content, 'parts', None)
+                if parts and len(parts) > 0:
+                    # Find first text part
+                    for p in parts:
+                        txt = getattr(p, 'text', None)
+                        if isinstance(txt, str) and txt.strip():
+                            return txt.strip()
+        # Fallback: try quick accessor if available
+        txt = getattr(resp, 'text', None)
+        if isinstance(txt, str):
+            return txt.strip()
+    except Exception:
+        # Swallow and fallback to empty
+        pass
+    return ''
+
+
+def _model_sequence() -> list:
+    """Return the list of models to try in order."""
+    seq = [MODEL_NAME]
+    if MODEL_FALLBACK and MODEL_FALLBACK not in seq:
+        seq.append(MODEL_FALLBACK)
+    return seq
+
+
+def _generate_with_fallback(prompt: str, gen_config: dict, timeout_seconds: int) -> tuple:
+    """
+    Try generating content using primary model, then fallback models on error/timeout.
+    Returns (response, model_name) or (None, None) if all failed.
+    """
+    models = _model_sequence()
+    logger.info("Attempting generation with model sequence: %s (timeout: %ds)", models, timeout_seconds)
+    for name in models:
+        try:
+            logger.info("Trying model: %s", name)
+            model = get_model(name)
+            if not model:
+                logger.warning(f"Model '{name}' not available; trying next")
+                continue
+            record_request()
+            logger.info("Sending request to model '%s'...", name)
+            resp = model.generate_content(
+                prompt,
+                generation_config=gen_config,
+                request_options={'timeout': timeout_seconds}
+            )
+            logger.info("Model '%s' responded successfully", name)
+            logger.info("Raw response from API: %s", resp)
+            return resp, name
+        except Exception as e:
+            logger.warning(f"Generation failed on model '{name}': {e}", exc_info=True)
+            continue
+    logger.error("All models in sequence failed to generate content")
+    return None, None
+
+
+def _fallback_question(normalized: str) -> str:
+    """Simple fallback question when LLM is unavailable."""
+    key = (normalized or '').strip()
+    if not key:
+        return "What information should be provided?"
+    friendly = key.replace('_', ' ').replace('-', ' ').strip()
+    if not friendly:
+        return "What information should be provided?"
+    title = friendly[0].upper() + friendly[1:]
+    return f"Please provide: {title}"
+
+
+def _prepare_batch_payload(items: list) -> str:
+    """Serialize batch request payload as JSON string for the LLM prompt.
+    
+    Deduplicates sentence context to reduce payload size. Sentences are
+    indexed and referenced by ID in the items array.
+    """
+    # Group placeholders by their sentence context (using a hash of prev+sentence+next)
+    sentence_map = {}  # hash -> {id, prev, sentence, next}
+    sentence_id_counter = 1
+    
+    structured_items = []
+    for item in items:
+        context = item.get('context') or {}
+        prev = _clip_text(context.get('prev', ''), 220)
+        sentence = _clip_text(context.get('sentence', ''), 320)
+        next_ = _clip_text(context.get('next', ''), 220)
+        
+        # Create a stable hash of the context
+        context_hash = hash((prev, sentence, next_))
+        
+        # Register sentence if not seen before
+        if context_hash not in sentence_map:
+            sentence_map[context_hash] = {
+                "id": sentence_id_counter,
+                "previous": prev,
+                "sentence": sentence,
+                "next": next_
+            }
+            sentence_id_counter += 1
+        
+        # Reference the sentence by ID
+        structured_items.append({
+            "placeholder": item.get('normalized', ''),
+            "pattern": item.get('pattern_type', ''),
+            "original": item.get('original', ''),
+            "sentence_id": sentence_map[context_hash]["id"]
+        })
+    
+    # Build final payload
+    sentences_array = sorted(sentence_map.values(), key=lambda x: x["id"])
+    payload = {
+        "sentences": sentences_array,
+        "items": structured_items
+    }
+    
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def generate_questions_for_candidates(items: list, use_llm: bool = True) -> dict:
+    """Generate questions for a list of detected placeholder candidates.
+
+    Args:
+        items: List of dicts with keys: normalized, original, pattern_type, context(prev/sentence/next).
+        use_llm: Whether to attempt LLM generation.
+
+    Returns:
+        dict[str, dict]: {normalized: {'question': str, 'source': 'llm'|'fallback', 'model': str|None}}
+    """
+    results = {}
+    if not items:
+        return results
+
+    # Deduplicate by normalized key while preserving order
+    deduped = []
+    seen = set()
+    for item in items:
+        key = item.get('normalized') or ''
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    # Seed results with fallbacks
+    for item in deduped:
+        key = item.get('normalized') or ''
+        results[key] = {
+            'question': _fallback_question(key),
+            'source': 'fallback',
+            'model': None
+        }
+
+    if not use_llm or not is_llm_enabled():
+        return results
+
+    allowed, wait_seconds = check_rate_limit()
+    if not allowed:
+        logger.warning("Rate limit hit before batch question generation; using fallbacks")
+        return results
+
+    payload_json = _prepare_batch_payload(deduped)
+    logger.info("=== BATCH QUESTION GENERATION START ===")
+    logger.info("Preparing to generate questions for %d placeholders", len(deduped))
+    logger.info("Batch question payload:\n%s", payload_json)
+    prompt = (
+        "You generate concise, professional questions that a legal assistant will ask a user to fill in placeholders in a document.\n"
+        "Below is a JSON object with two arrays:\n"
+        "- `sentences`: Contains unique sentence contexts, each with an `id`, `previous`, `sentence`, and `next` text.\n"
+        "- `items`: Contains placeholders, each referencing a sentence by `sentence_id`.\n\n"
+        "For each item in `items`, write ONE clear, professional question that gathers the information needed to fill that placeholder.\n"
+        "Guidelines:\n"
+        "- Use the placeholder name, pattern, original text, and the referenced sentence context to understand what is needed.\n"
+        "- Each question must be a single sentence, end with appropriate punctuation, and NOT include example answers.\n"
+        "- If sentence context is empty, infer from the placeholder name.\n"
+        "Return ONLY a JSON object where each key is the placeholder name and each value is the question string.\n\n"
+        f"data: {payload_json}\n"
+    )
+
+    try:
+        logger.info("Calling LLM with prompt (truncated first 500 chars):\n%s...", prompt[:500])
+        resp, model_used = _generate_with_fallback(prompt, GENERATION_CONFIG, 20)
+        logger.info("LLM responded, model used: %s", model_used)
+        response_text = _extract_response_text(resp)
+        logger.info("Extracted response text (length: %d chars):\n%s", len(response_text), response_text[:1000] if response_text else "(empty)")
+        if not response_text:
+            logger.warning("Batch question generation returned empty response; retaining fallbacks")
+            return results
+
+        # Clean markdown code fences (```json ... ```) that some models add
+        cleaned_text = response_text.strip()
+        if cleaned_text.startswith('```'):
+            # Remove opening fence (```json or ```)
+            lines = cleaned_text.split('\n', 1)
+            if len(lines) > 1:
+                cleaned_text = lines[1]
+            else:
+                cleaned_text = cleaned_text[3:]  # Just remove ```
+        if cleaned_text.endswith('```'):
+            # Remove closing fence
+            cleaned_text = cleaned_text[:-3]
+        cleaned_text = cleaned_text.strip()
+        
+        if cleaned_text != response_text:
+            logger.info("Cleaned markdown fences from response")
+
+        try:
+            data = json.loads(cleaned_text)
+            logger.info("Successfully parsed JSON response, keys found: %s", list(data.keys()))
+        except json.JSONDecodeError as e:
+            logger.warning("Batch question generation returned non-JSON response; retaining fallbacks. Error: %s", e)
+            logger.warning("Attempted to parse: %s", cleaned_text[:500])
+            return results
+
+        for item in deduped:
+            key = item.get('normalized') or ''
+            proposed = data.get(key)
+            if isinstance(proposed, dict):
+                question_text = proposed.get('question') or proposed.get('q')
+            else:
+                question_text = proposed
+
+            if isinstance(question_text, str):
+                clean = question_text.strip().strip('\"\'')
+                if clean:
+                    if clean[-1] not in {'.', '?', '!'}:
+                        clean += '?'
+                    if len(clean) <= 600:
+                        results[key] = {
+                            'question': clean,
+                            'source': 'llm',
+                            'model': model_used
+                        }
+        llm_count = sum(1 for v in results.values() if v['source'] == 'llm')
+        fallback_count = sum(1 for v in results.values() if v['source'] == 'fallback')
+        logger.info("=== BATCH QUESTION GENERATION COMPLETE ===")
+        logger.info("Total placeholders: %d, LLM-generated: %d, Fallback: %d, Model: %s", 
+                   len(deduped), llm_count, fallback_count, model_used if llm_count else 'N/A')
+        if llm_count > 0:
+            logger.info("Sample LLM questions:")
+            for i, (k, v) in enumerate(results.items()):
+                if v['source'] == 'llm' and i < 3:  # Show first 3 LLM questions
+                    logger.info("  - %s: %s", k, v['question'])
+        return results
+    except Exception as exc:
+        logger.error(f"Batch question generation failed with exception: {exc}", exc_info=True)
+        return results
+
+
+def _contextual_fallback_question(normalized: str, sentence: str = '') -> str:
+    """Generate a conversational fallback question using placeholder name + context."""
+    normalized = normalized or ''
+    clean_name = normalized.replace('_', ' ').replace('-', ' ').strip()
+    sentence = (sentence or '').strip()
+
+    # Provide useful snippet when available
+    snippet = ''
+    if sentence:
+        snippet = sentence[:120]
+        if len(sentence) > 120:
+            snippet += '...'
+
+    # Handle generic blanks
+    if normalized.startswith(('blank_', 'field_', 'amount_')) or clean_name.lower() in {'blank', 'field'}:
+        if snippet:
+            return f"What information should fill this blank? Context: \"{snippet}\""
+        return "What information should fill this blank?"
+
+    keywords = {
+        'name': "What is the full name?",
+        'company': "What is the company name?",
+        'date': "What is the relevant date? (e.g., January 1, 2024)",
+        'address': "What is the complete address?",
+        'email': "What is the email address?",
+        'phone': "What is the phone number?",
+        'amount': "What is the amount? (e.g., $1,000.00)",
+        'title': "What is the title or position?",
+        'signature': "Who should sign here?",
+        'party': "What is the party's name?",
+        'effective': "What is the effective date?",
+        'term': "What is the term or duration?",
+        'address': "What is the full address?"
+    }
+
+    lowered = clean_name.lower()
+    for key, question in keywords.items():
+        if key in lowered and key != 'blank':
+            if snippet:
+                return f"{question} Context: \"{snippet}\""
+            return question
+
+    if clean_name:
+        question = f"What is the {clean_name}?"
+        if snippet:
+            question += f" Context: \"{snippet}\""
+        return question
+
+    # Last resort
+    if snippet:
+        return f"What information should be provided here? Context: \"{snippet}\""
+    return "What information should be provided here?"
+
+
+@lru_cache(maxsize=512)
+def generate_question_from_context(normalized: str, sentence: str, prev: str = '', next_: str = '', options: tuple = None, use_llm: bool = True) -> dict:
+    """
+    Generate a context-aware question.
+    Returns dict: { 'question': str, 'options': list[str] | None }
+    - If options provided, craft a single-select question.
+    Fallback: simple question formatting.
+    """
+    normalized = normalized or ''
+    fallback_q = _contextual_fallback_question(normalized, sentence)
+    if options:
+        try:
+            opts = list(options)
+        except Exception:
+            opts = []
+        if opts:
+            fallback_q = f"Please select one of the following options: {', '.join(opts)}"
+
+    if not use_llm or not is_llm_enabled():
+        return {'question': fallback_q, 'options': list(options) if options else None}
+
+    allowed, wait_seconds = check_rate_limit()
+    if not allowed:
+        return {'question': fallback_q, 'options': list(options) if options else None}
+
+    # We'll try with fallback sequence
+
+    context_prev = _clip_text(prev, 300)
+    context_sentence = _clip_text(sentence, 400)
+    context_next = _clip_text(next_, 300)
+    options_part = ''
+    if options:
+        options_list = ', '.join(list(options))
+        options_part = f"\nOptions (single-select): {options_list}\n"
+
+    prompt = f"""
+Craft a concise, professional question (one sentence) to collect user input for a legal document field.
+Use only the provided minimal context. Do not include suggestions or sample answers.
+If options are provided, ask as a single-select and list the options explicitly.
+
+Field key: {normalized}
+Context:
+Previous: {context_prev}
+Sentence: {context_sentence}
+Next: {context_next}
+{options_part}
+Return only the question text.
+"""
+
+    try:
+        # PII-safe debug logging: only lengths, not content
+        try:
+            logger.debug(
+                "generate_question_from_context: lens prev=%d sent=%d next=%d opts=%d",
+                len(context_prev), len(context_sentence), len(context_next), len(options) if options else 0
+            )
+        except Exception:
+            pass
+        resp, used_model = _generate_with_fallback(prompt, GENERATION_CONFIG, 4)
+        q = _extract_response_text(resp).strip().strip('\n').strip('"\'"')
+        if q and not q.endswith(('?', '.', '!')):
+            q += '?'
+        if not q:
+            q = fallback_q
+        return {'question': q, 'options': list(options) if options else None}
+    except Exception as e:
+        logger.warning(f"generate_question_from_context LLM error: {e}")
+        return {'question': fallback_q, 'options': list(options) if options else None}
 

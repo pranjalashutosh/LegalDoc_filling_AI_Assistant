@@ -235,10 +235,19 @@ class UploadPage {
         const response = await api.post('/api/detect', {});
         
         if (response.success) {
-            // Store placeholder data
-            this.placeholderData = response;
-            session.setSessionData('placeholders', response.placeholders);
+            // Normalize API response for frontend usage
+            // Extract placeholder names array from object map
+            const placeholderMap = response.placeholders || {};
+            const placeholderNames = Array.isArray(placeholderMap)
+                ? placeholderMap
+                : Object.keys(placeholderMap);
+
+            // Persist in session for conversation flow
+            session.setSessionData('placeholders', placeholderNames);
             session.setSessionData('detection_result', response);
+
+            // Cache locally
+            this.placeholderData = response;
             return response;
         } else {
             throw new Error(response.error || 'Detection failed');
@@ -274,15 +283,19 @@ class UploadPage {
             return;
         }
         
-        // Update counts
-        this.uniqueCount.textContent = this.placeholderData.unique_count || 0;
-        this.totalCount.textContent = this.placeholderData.total_occurrences || 0;
-        
-        // Update patterns detected
-        const patterns = this.placeholderData.patterns_found || [];
-        this.patternsDetected.textContent = patterns.length > 0 
-            ? patterns.join(', ') 
-            : 'None';
+        // Update counts from API summary shape
+        const summary = this.placeholderData.summary || {};
+        this.uniqueCount.textContent = summary.total_unique || 0;
+        this.totalCount.textContent = summary.total_occurrences || 0;
+
+        // Aggregate pattern types from grouped metadata
+        const grouped = this.placeholderData.grouped || (summary.grouped || {});
+        const patternSet = new Set();
+        Object.values(grouped || {}).forEach(g => {
+            (g.patterns || []).forEach(p => patternSet.add(p));
+        });
+        const patterns = Array.from(patternSet);
+        this.patternsDetected.textContent = patterns.length > 0 ? patterns.join(', ') : 'None';
         
         // Show results section
         Utils.hide(this.uploadSection);

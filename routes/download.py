@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 download_bp = Blueprint('download', __name__)
 
 
-@download_bp.route('/api/download', methods=['GET'])
+@download_bp.route('/download', methods=['GET'])
 def download_document():
     """
     Download the completed document.
@@ -53,7 +53,7 @@ def download_document():
         return handle_api_error(e, 'Failed to download document')
 
 
-@download_bp.route('/api/download/status', methods=['GET'])
+@download_bp.route('/download/status', methods=['GET'])
 def download_status():
     """
     Check if a document is available for download.
@@ -90,7 +90,7 @@ def download_status():
         return handle_api_error(e, 'Failed to check download status')
 
 
-@download_bp.route('/api/download/info', methods=['GET'])
+@download_bp.route('/download/info', methods=['GET'])
 def download_info():
     """
     Get information about the completed document.
@@ -130,7 +130,7 @@ def download_info():
         return handle_api_error(e, 'Failed to get download info')
 
 
-@download_bp.route('/api/download/cleanup', methods=['POST'])
+@download_bp.route('/download/cleanup', methods=['POST'])
 def cleanup_download():
     """
     Clean up the completed document after download.

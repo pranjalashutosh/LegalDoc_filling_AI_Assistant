@@ -3,9 +3,13 @@ Placeholder detection for Legal Document Filler.
 Detects multiple placeholder patterns in .docx files.
 """
 
+import logging
 import re
 from docx import Document
 from typing import Dict, List, Set
+
+
+logger = logging.getLogger(__name__)
 
 
 class PlaceholderDetectionError(Exception):
@@ -21,7 +25,7 @@ def detect_placeholders(docx_path: str) -> Dict[str, List[str]]:
     - {{placeholder_name}} - Double curly braces
     - {placeholder_name} - Single curly braces
     - [Placeholder Name] - Square brackets (any case, e.g., [Date of Safe])
-    - _____ - Underscores (5 or more)
+    - _____ - Underscores (3 or more)
     - $[_____] - Dollar sign with brackets and underscores
     
     Args:
@@ -41,24 +45,23 @@ def detect_placeholders(docx_path: str) -> Dict[str, List[str]]:
     
     placeholders = {}  # {normalized_name: [original_patterns]}
     
-    # Define regex patterns
+    # Define regex patterns (more permissive; support mixed case and spacing)
     patterns = [
-        (r'\{\{([a-zA-Z0-9_]+)\}\}', 'double_curly'),           # {{name}}
-        (r'\{([a-zA-Z0-9_]+)\}', 'single_curly'),               # {name}
-        (r'\[([A-Z][a-zA-Z0-9_\s]+)\]', 'square_bracket'),      # [Date of Safe], [NAME]
-        (r'_{5,}', 'underscore'),                               # _____
-        (r'\$\[_{5,}\]', 'dollar_underscore'),                  # $[_____]
+        (r'\$\s*\[\s*_{3,}\s*\]', 'dollar_underscore'),               # $[_____]
+        (r'\[\s*([A-Za-z][A-Za-z0-9_\s-]+?)\s*\]', 'square_bracket'),  # [Placeholder Name]
+        (r'\{\{\s*([A-Za-z0-9_\s-]+?)\s*\}\}', 'double_curly'),      # {{ placeholder }}
+        (r'\{\s*([A-Za-z0-9_\s-]+?)\s*\}', 'single_curly'),            # { placeholder }
+        (r'_{3,}', 'underscore'),                                          # ___ (3+)
     ]
     
     # Track context for underscore patterns
     underscore_counter = 0
     
-    # Parse document paragraphs
-    for paragraph in doc.paragraphs:
-        text = paragraph.text
-        
-        if not text.strip():
-            continue
+    # Helper to process a single text chunk
+    def process_text(text: str):
+        nonlocal underscore_counter
+        if not text or not text.strip():
+            return
         
         # Check each pattern
         for pattern, pattern_type in patterns:
@@ -72,29 +75,37 @@ def detect_placeholders(docx_path: str) -> Dict[str, List[str]]:
                     # Try to extract label before underscores
                     # Look for pattern like "Name: _____" or "Name:_____"
                     before_match = text[:match.start()].strip()
-                    label_match = re.search(r'(\w+)\s*:\s*$', before_match)
+                    label_match = re.search(r'([A-Za-z][A-Za-z0-9_\s-]{1,50})\s*:\s*$', before_match)
                     
                     if label_match:
-                        normalized = label_match.group(1).lower()
+                        normalized = normalize_placeholder_name(label_match.group(1))
                     else:
                         # Use generic name with counter
                         underscore_counter += 1
                         normalized = f"field_{underscore_counter}"
                 
                 elif pattern_type == 'dollar_underscore':
-                    # Try to find label or use generic name
-                    before_match = text[:match.start()].strip()
-                    label_match = re.search(r'(\w+)\s*$', before_match)
-                    
-                    if label_match:
-                        normalized = label_match.group(1).lower()
+                    # Try to find a descriptive label AFTER the brackets, e.g., (the "Purchase Amount")
+                    after_text = text[match.end():match.end()+100]
+                    after_label = re.search(r"\(\s*the\s+['\"""]?([A-Za-z][A-Za-z0-9_\s-]{2,})['\"""]?\s*\)", after_text, re.IGNORECASE)
+
+                    if after_label:
+                        normalized = normalize_placeholder_name(after_label.group(1))
                     else:
-                        normalized = f"amount_{len([k for k in placeholders.keys() if k.startswith('amount_')]) + 1}"
+                        # Otherwise, try label immediately before the brackets
+                        before_match = text[:match.start()].strip()
+                        label_match = re.search(r'([A-Za-z][A-Za-z0-9_\s-]{2,50})\s*:?\s*$', before_match)
+                        stopwords = {'of', 'the', 'a', 'an', 'is', 'at', 'on', 'by', 'for', 'in'}
+                        if label_match and label_match.group(1).strip().lower() not in stopwords:
+                            normalized = normalize_placeholder_name(label_match.group(1))
+                        else:
+                            base = 'amount'
+                            normalized = f"{base}_{len([k for k in placeholders.keys() if k.startswith(base + '_')]) + 1}"
                 
                 else:
                     # For other patterns, normalize the captured content
                     captured = match.group(1)
-                    normalized = captured.lower().replace(' ', '_')
+                    normalized = normalize_placeholder_name(captured)
                 
                 # Add to placeholders dict
                 if normalized not in placeholders:
@@ -103,7 +114,48 @@ def detect_placeholders(docx_path: str) -> Dict[str, List[str]]:
                 # Only add if not already in list (avoid duplicates in same paragraph)
                 if original not in placeholders[normalized]:
                     placeholders[normalized].append(original)
-    
+
+    # Parse document paragraphs
+    for paragraph in doc.paragraphs:
+        process_text(paragraph.text)
+
+    # Parse tables (signature blocks and forms are often inside tables)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    process_text(paragraph.text)
+
+    # Heuristic: capture common signature labels without explicit placeholders
+    # e.g., a paragraph that is exactly "Address:" or "Email:" etc.
+    signature_labels = {
+        'address:': 'address',
+        'email:': 'email',
+        'phone:': 'phone',
+        'by:': 'by',
+    }
+    def add_label_placeholder(label_key):
+        name = signature_labels[label_key]
+        key = normalize_placeholder_name(name)
+        placeholders.setdefault(key, []).append(label_key)
+
+    # Re-scan document (paragraphs and table cells) for bare labels
+    def scan_for_bare_labels(text: str):
+        if not text:
+            return
+        t = text.strip()
+        low = t.lower()
+        if low in signature_labels:
+            add_label_placeholder(low)
+
+    for paragraph in doc.paragraphs:
+        scan_for_bare_labels(paragraph.text)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    scan_for_bare_labels(paragraph.text)
+
     return placeholders
 
 
@@ -126,6 +178,14 @@ def reduce_false_positives(placeholders: Dict[str, List[str]], doc_text: str = N
         dict: Filtered placeholders
     """
     filtered = {}
+    # Ignore lists and patterns
+    ignore_acronyms = {
+        'llc', 'usa', 'inc', 'ltd', 'co', 'corp', 'aka', 'dba', 'llp', 'pllc'
+    }
+    # Allowlist of short, legitimate placeholder names that often appear once
+    allow_short_singletons = {
+        'by', 'name', 'title', 'email', 'address', 'phone'
+    }
     
     for normalized, originals in placeholders.items():
         # Skip if normalized name is only digits
@@ -161,6 +221,21 @@ def reduce_false_positives(placeholders: Dict[str, List[str]], doc_text: str = N
                 if re.match(r'^Section\s+\d+', content, re.IGNORECASE):
                     has_false_positive = True
                     break
+
+                # Filter exhibit/schedule/annex tags: [Exhibit A], [Schedule 1], [Annex B]
+                if re.match(r'^(Exhibit|Schedule|Annex)\s+[A-Za-z0-9]+$', content, re.IGNORECASE):
+                    has_false_positive = True
+                    break
+
+                # Filter common acronyms specifically called out (e.g., [LLC], [USA])
+                if content.strip().lower() in ignore_acronyms:
+                    has_false_positive = True
+                    break
+
+                # Filter common email-template boilerplate markers inside brackets
+                if re.search(r'unsubscribe|manage\s+preferences|view\s+in\s+browser', content, re.IGNORECASE):
+                    has_false_positive = True
+                    break
                 
                 # Filter single character brackets: [a], [x]
                 if len(content) == 1:
@@ -178,7 +253,7 @@ def reduce_false_positives(placeholders: Dict[str, List[str]], doc_text: str = N
             # Keep if it's multi-word (has underscore in normalized name)
             if '_' not in normalized:
                 # Skip single-occurrence, single-word placeholders that are very short
-                if len(normalized) <= 3:
+                if len(normalized) <= 3 and normalized not in allow_short_singletons:
                     continue
         
         # If appears 2+ times or is multi-word, keep it
@@ -277,7 +352,7 @@ def group_similar_placeholders(placeholders: Dict[str, List[str]]) -> Dict[str, 
                 pattern_types.add('single_curly')
             elif orig.startswith('[') and orig.endswith(']'):
                 pattern_types.add('square_bracket')
-            elif orig.startswith('$['):
+            elif orig.startswith('$[') or orig.startswith('$ ['):
                 pattern_types.add('dollar_underscore')
             elif '_' in orig and not any(c.isalnum() for c in orig):
                 pattern_types.add('underscore')
@@ -313,5 +388,241 @@ def get_placeholder_summary(placeholders: Dict[str, List[str]]) -> Dict[str, any
         'placeholders': list(placeholders.keys()),
         'counts': counts,
         'grouped': grouped
+    }
+
+
+def _split_sentences_with_spans(text: str) -> List[Dict[str, int]]:
+    """
+    Split text into sentences and return list of dicts with start/end indexes and sentence text.
+    Very lightweight heuristic using punctuation . ! ? ; and line breaks.
+    """
+    if not text:
+        return []
+    spans = []
+    start = 0
+    i = 0
+    n = len(text)
+    terminators = {'.', '!', '?', ';', '\n'}
+    while i < n:
+        ch = text[i]
+        if ch in terminators:
+            # Include the terminator
+            end = i + 1
+            sent = text[start:end].strip()
+            if sent:
+                spans.append({'start': start, 'end': end, 'text': sent})
+            start = end
+        i += 1
+    # Tail
+    if start < n:
+        sent = text[start:n].strip()
+        if sent:
+            spans.append({'start': start, 'end': n, 'text': sent})
+    return spans
+
+
+def _extract_sentence_context(paragraph_text: str, match_start: int, match_end: int) -> Dict[str, str]:
+    """
+    Extract the sentence containing the match and its immediate previous and next sentences.
+    Returns dict with keys: prev, sentence, next.
+    """
+    sentences = _split_sentences_with_spans(paragraph_text or '')
+    if not sentences:
+        t = (paragraph_text or '').strip()
+        return {'prev': '', 'sentence': t, 'next': ''}
+    idx = 0
+    for j, span in enumerate(sentences):
+        if span['start'] <= match_start < span['end']:
+            idx = j
+            break
+    prev_text = sentences[idx - 1]['text'] if idx - 1 >= 0 else ''
+    sent_text = sentences[idx]['text']
+    next_text = sentences[idx + 1]['text'] if idx + 1 < len(sentences) else ''
+    # Clip to reasonable lengths to keep LLM payload minimal
+    def clip(s: str, max_len: int = 300) -> str:
+        return s[:max_len]
+    return {
+        'prev': clip(prev_text),
+        'sentence': clip(sent_text, 400),
+        'next': clip(next_text)
+    }
+
+
+def detect_placeholders_with_context(docx_path: str) -> Dict[str, any]:
+    """
+    Detect placeholders and emit candidate metadata with minimal context.
+    Uses collect → arbitrate → process pipeline with explicit priorities.
+    """
+    try:
+        doc = Document(docx_path)
+    except Exception as e:
+        raise PlaceholderDetectionError(f"Failed to open document: {str(e)}")
+
+    placeholders: Dict[str, List[str]] = {}
+    candidates: List[Dict[str, any]] = []
+
+    # Patterns and priorities
+    patterns = [
+        (r'\$\s*\[\s*_{3,}\s*\]', 'dollar_underscore'),
+        (r'\[\s*([A-Za-z][A-Za-z0-9_\s-]+?)\s*\]', 'square_bracket'),
+        (r'\{\{\s*([A-Za-z0-9_\s-]+?)\s*\}\}', 'double_curly'),
+        (r'\{\s*([A-Za-z0-9_\s-]+?)\s*\}', 'single_curly'),
+        (r'_{3,}', 'underscore'),
+    ]
+    priority_map = {
+        'signature_label': 6,
+        'dollar_underscore': 5,
+        'square_bracket': 4,
+        'double_curly': 3,
+        'single_curly': 2,
+        'underscore': 1,
+    }
+
+    underscore_counter = 0
+
+    def collect_candidates(text: str, locator: str) -> list:
+        collected = []
+        if not text:
+            return collected
+        t = text
+        # Pattern-based
+        for pattern, pattern_type in patterns:
+            for m in re.finditer(pattern, t):
+                start, end = m.start(), m.end()
+                length = end - start
+                original = m.group(0)
+                captured = None
+                if pattern_type in ('double_curly', 'single_curly', 'square_bracket') and m.groups():
+                    captured = m.group(1)
+                collected.append({
+                    'start': start,
+                    'end': end,
+                    'length': length,
+                    'kind': pattern_type,
+                    'priority': priority_map[pattern_type],
+                    'original': original,
+                    'captured': captured,
+                    'locator': locator,
+                    'text': t,
+                })
+        # Signature-line heuristic
+        sig_re = re.compile(r'^\s*(Address|Email|E-mail|Phone|Name|Title)\s*:?\s*([ \t\._\-—]*)$', re.IGNORECASE)
+        m = sig_re.match(t or '')
+        if m:
+            remainder = m.group(2) or ''
+            if not re.search(r'[A-Za-z0-9]', remainder):
+                collected.append({
+                    'start': 0,
+                    'end': len(t),
+                    'length': len(t),
+                    'kind': 'signature_label',
+                    'priority': priority_map['signature_label'],
+                    'original': t.strip(),
+                    'captured': m.group(1),
+                    'locator': locator,
+                    'text': t,
+                })
+        return collected
+
+    def arbitrate(collected: list) -> list:
+        collected.sort(key=lambda c: (c['start'], -c['priority'], -c['length']))
+        kept = []
+        taken = []  # list of (s,e)
+        for c in collected:
+            s, e = c['start'], c['end']
+            overlap = any(not (e <= s2 or s >= e2) for s2, e2 in taken)
+            if overlap:
+                logger.debug("[placeholder-detect] dropped overlap kind=%s span=(%d,%d)", c['kind'], s, e)
+                continue
+            kept.append(c)
+            taken.append((s, e))
+        return kept
+
+    def process_kept(kept: list):
+        nonlocal underscore_counter
+        for c in kept:
+            t = c['text']
+            start, end = c['start'], c['end']
+            pattern_type = c['kind']
+            original = c['original']
+
+            # Normalize
+            if pattern_type == 'underscore':
+                before = (t[:start] or '').strip()
+                label_m = re.search(r'([A-Za-z][A-Za-z0-9_\s-]{1,50})\s*:\s*$', before)
+                if label_m:
+                    normalized = normalize_placeholder_name(label_m.group(1))
+                else:
+                    underscore_counter += 1
+                    normalized = f"field_{underscore_counter}"
+            elif pattern_type == 'dollar_underscore':
+                after_text = t[end:end+100]
+                after_label = re.search(r"\(\s*the\s+['\"“”]?([A-Za-z][A-Za-z0-9_\s-]{2,})['\"“”]?\s*\)", after_text, re.IGNORECASE)
+                if after_label:
+                    normalized = normalize_placeholder_name(after_label.group(1))
+                else:
+                    before = (t[:start] or '').strip()
+                    label_m = re.search(r'([A-Za-z][A-Za-z0-9_\s-]{2,50})\s*:?\s*$', before)
+                    stopwords = {'of', 'the', 'a', 'an', 'is', 'at', 'on', 'by', 'for', 'in'}
+                    if label_m and label_m.group(1).strip().lower() not in stopwords:
+                        normalized = normalize_placeholder_name(label_m.group(1))
+                    else:
+                        base = 'amount'
+                        normalized = f"{base}_{len([k for k in placeholders.keys() if k.startswith(base + '_')]) + 1}"
+            elif pattern_type in ('double_curly', 'single_curly', 'square_bracket'):
+                normalized = normalize_placeholder_name(c.get('captured') or '')
+            elif pattern_type == 'signature_label':
+                normalized = normalize_placeholder_name(c.get('captured') or 'field')
+            else:
+                underscore_counter += 1
+                normalized = f"field_{underscore_counter}"
+
+            placeholders.setdefault(normalized, [])
+            if original not in placeholders[normalized]:
+                placeholders[normalized].append(original)
+
+            context = _extract_sentence_context(t, start, end)
+            instance_id = f"{c['locator']}-s{start}-e{end}"
+            # Log kept
+            def _tr(val: str, lim: int = 120) -> str:
+                if not val:
+                    return ''
+                return val if len(val) <= lim else val[:lim] + '…'
+            logger.debug(
+                "[placeholder-detect] pattern=%s normalized=%s locator=%s original=%r prev=%r sentence=%r next=%r",
+                pattern_type, normalized, c['locator'], original,
+                _tr(context.get('prev')), _tr(context.get('sentence')), _tr(context.get('next'))
+            )
+            candidates.append({
+                'id': instance_id,
+                'normalized': normalized,
+                'original': original,
+                'pattern_type': pattern_type,
+                'context': context
+            })
+
+    # Body paragraphs
+    for pi, paragraph in enumerate(doc.paragraphs):
+        locator = f"p{pi}"
+        kept = arbitrate(collect_candidates(paragraph.text, locator))
+        process_kept(kept)
+
+    # Tables
+    for ti, table in enumerate(doc.tables):
+        for ri, row in enumerate(table.rows):
+            for ci, cell in enumerate(row.cells):
+                for pi, paragraph in enumerate(cell.paragraphs):
+                    locator = f"t{ti}-r{ri}-c{ci}-p{pi}"
+                    kept = arbitrate(collect_candidates(paragraph.text, locator))
+                    process_kept(kept)
+
+    groups: Dict[str, List[str]] = {}
+    for cand in candidates:
+        groups.setdefault(cand['normalized'], []).append(cand['id'])
+
+    return {
+        'placeholders': placeholders,
+        'candidates': candidates,
+        'groups': groups
     }
 

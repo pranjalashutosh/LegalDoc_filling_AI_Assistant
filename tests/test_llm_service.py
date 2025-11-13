@@ -8,7 +8,8 @@ from lib.llm_service import (
     generate_question,
     is_llm_enabled,
     check_rate_limit,
-    record_request
+    record_request,
+    generate_questions_for_candidates
 )
 
 
@@ -187,6 +188,27 @@ class TestBatchQuestionGeneration:
         
         except ImportError:
             pytest.skip("Batch generation not implemented")
+
+    def test_generate_questions_for_candidates_fallback(self):
+        """Batch helper returns fallback structure when LLM disabled."""
+        items = [{
+            'normalized': 'company_name',
+            'original': '{{COMPANY_NAME}}',
+            'pattern_type': 'double_curly',
+            'context': {
+                'prev': 'This agreement is entered into by and between the parties.',
+                'sentence': 'The {{COMPANY_NAME}} shall provide services.',
+                'next': 'Payment terms are outlined below.'
+            }
+        }]
+
+        results = generate_questions_for_candidates(items, use_llm=False)
+
+        assert 'company_name' in results
+        entry = results['company_name']
+        assert entry['source'] == 'fallback'
+        assert isinstance(entry['question'], str)
+        assert len(entry['question']) > 0
 
 
 # Note: Full LLM integration tests would require:

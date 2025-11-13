@@ -5,11 +5,12 @@ Handles detection of placeholders in uploaded documents.
 
 from flask import Blueprint, request, jsonify, session, current_app
 from lib.placeholder_detector import (
-    detect_placeholders,
+    detect_placeholders_with_context,
     reduce_false_positives,
     get_placeholder_summary,
     PlaceholderDetectionError
 )
+from lib.llm_service import generate_questions_for_candidates
 from lib.error_handlers import (
     handle_docx_error,
     validate_docx_file,
@@ -51,16 +52,23 @@ def detect():
         if not is_valid:
             return error_response
         
-        # Detect placeholders
+        # Detect placeholders with minimal context and grouping
         try:
-            raw_placeholders = detect_placeholders(file_path)
+            detection_result = detect_placeholders_with_context(file_path)
         except PlaceholderDetectionError as e:
             return handle_docx_error(e, current_app.logger)
         except Exception as e:
             return handle_docx_error(e, current_app.logger)
         
-        # Apply false positive filtering
+        raw_placeholders = detection_result.get('placeholders', {})
+        candidates = detection_result.get('candidates', [])
+        groups = detection_result.get('groups', {})
+
+        # Apply false positive filtering to placeholders
         filtered_placeholders = reduce_false_positives(raw_placeholders)
+
+        # Filter groups to only include kept canonical keys
+        filtered_groups = {k: v for k, v in groups.items() if k in filtered_placeholders}
         
         # Check if any placeholders were found after filtering
         if not filtered_placeholders or len(filtered_placeholders) == 0:
@@ -71,13 +79,84 @@ def detect():
         
         # Get summary
         summary = get_placeholder_summary(filtered_placeholders)
-        
-        # Store in session
-        session['placeholders'] = {
+
+        # Derive a simple list of placeholder names for later conversation flow
+        placeholder_names = list(filtered_placeholders.keys())
+
+        # Build representative candidates for batch question generation
+        candidate_by_id = {c.get('id'): c for c in candidates if c.get('id')}
+        candidate_by_key = {}
+        for c in candidates:
+            key = c.get('normalized')
+            if key and key not in candidate_by_key:
+                candidate_by_key[key] = c
+
+        question_items = []
+        for key in placeholder_names:
+            candidate = None
+            for cand_id in filtered_groups.get(key, []) or []:
+                candidate = candidate_by_id.get(cand_id)
+                if candidate:
+                    break
+            if not candidate:
+                candidate = candidate_by_key.get(key)
+            context = (candidate.get('context') if candidate else {}) or {}
+            question_items.append({
+                'normalized': key,
+                'original': candidate.get('original', '') if candidate else '',
+                'pattern_type': candidate.get('pattern_type', '') if candidate else '',
+                'context': context,
+            })
+
+        try:
+            batch_questions = generate_questions_for_candidates(question_items)
+        except Exception as batch_err:
+            current_app.logger.warning(f"Batch question generation error: {batch_err}", exc_info=True)
+            batch_questions = {}
+
+        questions_map = {}
+        question_sources = {}
+        question_models = {}
+        for item in question_items:
+            key = item['normalized']
+            entry = batch_questions.get(key) if batch_questions else None
+            question_text = None
+            source = 'fallback'
+            model_name = None
+            if isinstance(entry, dict):
+                question_text = entry.get('question')
+                source = entry.get('source', 'fallback')
+                model_name = entry.get('model')
+
+            if not question_text:
+                friendly = key.replace('_', ' ').strip()
+                question_text = f"Please provide: {friendly.title()}" if friendly else "What information should be provided?"
+                source = 'fallback'
+
+            questions_map[key] = question_text
+            question_sources[key] = source
+            if model_name:
+                question_models[key] = model_name
+
+        llm_success = sum(1 for src in question_sources.values() if src == 'llm')
+        current_app.logger.info(
+            "Prepared questions for %d placeholders (llm=%d)",
+            len(placeholder_names), llm_success
+        )
+
+        # Store in session (both simple list and detailed structures)
+        session['placeholders'] = placeholder_names  # canonical keys used by conversation endpoints
+        session['placeholder_details'] = {
             'raw': raw_placeholders,
             'filtered': filtered_placeholders,
             'summary': summary,
-            'detected_at': datetime.utcnow().isoformat()
+            'candidates': candidates,
+            'groups': filtered_groups,
+            'canonical_placeholders': placeholder_names,
+            'detected_at': datetime.utcnow().isoformat(),
+            'questions': questions_map,
+            'question_sources': question_sources,
+            'question_models': question_models
         }
         
         # Update last activity
@@ -100,7 +179,7 @@ def detect():
                 'counts': summary['counts']
             },
             'grouped': summary['grouped'],
-            'detected_at': session['placeholders']['detected_at']
+            'detected_at': session['placeholder_details']['detected_at']
         }), 200
     
     except Exception as e:
@@ -123,14 +202,14 @@ def detect_status():
         JSON response with detection status
     """
     try:
-        if 'placeholders' not in session:
+        if 'placeholder_details' not in session:
             return jsonify({
                 'success': True,
                 'detected': False,
                 'message': 'No placeholders detected yet'
             }), 200
         
-        placeholder_info = session['placeholders']
+        placeholder_info = session['placeholder_details']
         summary = placeholder_info.get('summary', {})
         
         return jsonify({
@@ -160,14 +239,14 @@ def detect_details():
         JSON response with full placeholder details
     """
     try:
-        if 'placeholders' not in session:
+        if 'placeholder_details' not in session:
             return jsonify({
                 'success': False,
                 'error': 'Not detected',
                 'message': 'No placeholders have been detected yet'
             }), 404
         
-        placeholder_info = session['placeholders']
+        placeholder_info = session['placeholder_details']
         summary = placeholder_info.get('summary', {})
         
         return jsonify({
@@ -176,7 +255,9 @@ def detect_details():
             'summary': summary,
             'raw_count': len(placeholder_info.get('raw', {})),
             'filtered_count': len(placeholder_info.get('filtered', {})),
-            'detected_at': placeholder_info.get('detected_at')
+            'detected_at': placeholder_info.get('detected_at'),
+            'groups': placeholder_info.get('groups', {}),
+            'candidates': placeholder_info.get('candidates', [])
         }), 200
     
     except Exception as e:

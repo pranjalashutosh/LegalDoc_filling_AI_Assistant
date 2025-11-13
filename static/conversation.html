@@ -55,6 +55,8 @@
                             placeholder="Type your answer here..."
                             autocomplete="off"
                         >
+                        <!-- Options (single-select) -->
+                        <div id="options-container" class="answer-options hidden"></div>
                         <p id="input-hint" class="input-hint">Press Enter or click Next to continue</p>
                         <div id="answer-error" class="error-message hidden">
                             <svg class="error-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -82,6 +84,19 @@
                         <button id="next-btn" class="btn btn-primary" disabled>
                             Next →
                         </button>
+                    </div>
+
+                    <!-- Per-instance Override (advanced) -->
+                    <div class="advanced-section" style="margin-top: 1rem;">
+                        <details>
+                            <summary style="cursor: pointer; color: var(--text-secondary);">Override a single occurrence (advanced)</summary>
+                            <div style="margin-top: 0.75rem; display: grid; gap: 0.5rem;">
+                                <label for="instance-select" class="answer-label">Choose occurrence</label>
+                                <select id="instance-select" class="answer-input"></select>
+                                <button id="override-btn" class="btn btn-secondary">Apply Override</button>
+                                <p class="input-hint">Overrides only one occurrence; global answer remains.</p>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </section>

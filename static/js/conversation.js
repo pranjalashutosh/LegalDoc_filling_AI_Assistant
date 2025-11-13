@@ -25,6 +25,7 @@ class ConversationPage {
         // Question and answer elements
         this.questionText = document.getElementById('question-text');
         this.answerInput = document.getElementById('answer-input');
+        this.optionsContainer = document.getElementById('options-container');
         this.inputHint = document.getElementById('input-hint');
         this.answerError = document.getElementById('answer-error');
         this.answerErrorText = document.getElementById('answer-error-text');
@@ -36,6 +37,10 @@ class ConversationPage {
         this.backBtn = document.getElementById('back-btn');
         this.nextBtn = document.getElementById('next-btn');
         this.returnHomeBtn = document.getElementById('return-home-btn');
+
+        // Advanced override controls
+        this.instanceSelect = document.getElementById('instance-select');
+        this.overrideBtn = document.getElementById('override-btn');
         
         this.init();
     }
@@ -60,6 +65,11 @@ class ConversationPage {
         
         // Error section
         this.returnHomeBtn.addEventListener('click', () => this.returnToHome());
+
+        // Override apply
+        if (this.overrideBtn) {
+            this.overrideBtn.addEventListener('click', () => this.applyOverride());
+        }
     }
 
     /**
@@ -67,8 +77,11 @@ class ConversationPage {
      */
     async loadSessionData() {
         try {
-            // Get placeholders from session
-            const placeholders = session.getSessionData('placeholders');
+            // Get placeholders from session and normalize to an array of names
+            const placeholdersRaw = session.getSessionData('placeholders');
+            const placeholders = Array.isArray(placeholdersRaw)
+                ? placeholdersRaw
+                : Object.keys(placeholdersRaw || {});
             const enableLLM = session.getSessionData('enable_llm');
             
             if (!placeholders || placeholders.length === 0) {
@@ -122,9 +135,20 @@ class ConversationPage {
             if (response.success) {
                 this.currentQuestion = response.question;
                 this.questionText.textContent = response.question;
+
+                // Render options if provided (single-select)
+                this.renderOptions(response.options);
+
+                // Load instances for per-instance override selector
+                await this.loadInstancesForCurrentKey();
                 
                 // Focus on input
-                this.answerInput.focus();
+                if (!response.options || response.options.length === 0) {
+                    this.answerInput.focus();
+                } else {
+                    const firstRadio = this.optionsContainer.querySelector('input[type="radio"]');
+                    if (firstRadio) firstRadio.focus();
+                }
             } else {
                 throw new Error(response.error || 'Failed to load question');
             }
@@ -138,6 +162,38 @@ class ConversationPage {
             this.questionText.textContent = fallbackQuestion;
             
             this.answerInput.focus();
+        }
+    }
+
+    renderOptions(options) {
+        // Clear existing
+        this.optionsContainer.innerHTML = '';
+        if (options && Array.isArray(options) && options.length > 0) {
+            // Show radio group and hide text input
+            Utils.show(this.optionsContainer);
+            this.answerInput.classList.add('hidden');
+            options.forEach((opt, idx) => {
+                const id = `opt_${idx}`;
+                const wrapper = document.createElement('div');
+                wrapper.className = 'option-item';
+                const radio = document.createElement('input');
+                radio.type = 'radio';
+                radio.name = 'answer_options';
+                radio.id = id;
+                radio.value = opt;
+                const label = document.createElement('label');
+                label.setAttribute('for', id);
+                label.textContent = opt;
+                wrapper.appendChild(radio);
+                wrapper.appendChild(label);
+                this.optionsContainer.appendChild(wrapper);
+            });
+            // Update next button state based on selection
+            this.optionsContainer.addEventListener('change', () => this.handleInputChange());
+        } else {
+            // Show text input
+            Utils.hide(this.optionsContainer);
+            this.answerInput.classList.remove('hidden');
         }
     }
 
@@ -161,7 +217,15 @@ class ConversationPage {
      * Handle input change
      */
     handleInputChange() {
-        const value = this.answerInput.value.trim();
+        // If radio options present, enable next when one is selected
+        const radios = this.optionsContainer ? this.optionsContainer.querySelectorAll('input[type="radio"]') : [];
+        let selectedValue = '';
+        if (radios && radios.length > 0) {
+            for (const r of radios) {
+                if (r.checked) { selectedValue = r.value; break; }
+            }
+        }
+        const value = (radios && radios.length > 0) ? selectedValue : this.answerInput.value.trim();
         
         // Enable/disable next button
         this.nextBtn.disabled = value.length === 0;
@@ -176,7 +240,16 @@ class ConversationPage {
      * Handle next button click
      */
     async handleNext() {
-        const value = this.answerInput.value.trim();
+        // Determine value from radio or text input
+        let value = '';
+        const radios = this.optionsContainer ? this.optionsContainer.querySelectorAll('input[type="radio"]') : [];
+        if (radios && radios.length > 0) {
+            for (const r of radios) {
+                if (r.checked) { value = r.value; break; }
+            }
+        } else {
+            value = this.answerInput.value.trim();
+        }
         
         // Validate input
         if (value.length === 0) {
@@ -222,6 +295,54 @@ class ConversationPage {
             } else {
                 this.navigateToPreview();
             }
+        }
+    }
+
+    async loadInstancesForCurrentKey() {
+        try {
+            const currentPlaceholder = this.placeholders[this.currentIndex];
+            const details = await api.get('/api/detect/details');
+            const groups = details.groups || {};
+            const ids = groups[currentPlaceholder] || [];
+            this.instanceSelect.innerHTML = '';
+            ids.forEach(id => {
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = id;
+                this.instanceSelect.appendChild(opt);
+            });
+        } catch (e) {
+            console.error('Failed to load instances', e);
+        }
+    }
+
+    async applyOverride() {
+        const currentPlaceholder = this.placeholders[this.currentIndex];
+        const instanceId = this.instanceSelect ? this.instanceSelect.value : '';
+        if (!instanceId) return;
+        // Value to override = current input or selected radio
+        let value = '';
+        const radios = this.optionsContainer ? this.optionsContainer.querySelectorAll('input[type="radio"]') : [];
+        if (radios && radios.length > 0) {
+            for (const r of radios) { if (r.checked) { value = r.value; break; } }
+        } else {
+            value = this.answerInput.value.trim();
+        }
+        if (!value) {
+            this.showAnswerError('Please provide an answer before applying override');
+            return;
+        }
+        try {
+            loading.show(this.overrideBtn, { text: 'Applying...' });
+            await api.post('/api/conversation/answer/instance', {
+                instance_id: instanceId,
+                normalized: currentPlaceholder,
+                answer: value
+            });
+            loading.hide(this.overrideBtn);
+        } catch (e) {
+            loading.hide(this.overrideBtn);
+            console.error('Override failed', e);
         }
     }
 
